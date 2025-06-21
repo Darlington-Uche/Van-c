@@ -3,11 +3,13 @@ import re
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError, RPCError
 from difflib import SequenceMatcher
+from fastapi import FastAPI, Response
+import uvicorn
 
 # Configure logging
 logging.basicConfig(
@@ -20,12 +22,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Initialize FastAPI app
+app = FastAPI()
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
 # Load environment variables
 load_dotenv()
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 TARGET_BOT = "@vankedisicoin_bot"
-NOTIFICATION_GROUP = os.getenv("NOT" , "")
+NOTIFICATION_GROUP = os.getenv("NOT", "")
+SESSION_STRING = os.getenv("SESSION_STRING", "")
 
 if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
     logger.critical("Missing required environment variables. Please check API_ID, API_HASH, and NOTIFICATION_GROUP")
@@ -197,33 +208,36 @@ async def check_and_notify():
 async def main():
     global client
     
-    # Get session string from user
-    print("\nPlease paste your Telegram session string:")
-    session_string = input().strip()
-    
-    if not session_string:
-        logger.error("No session string provided")
-        return
-    
-    logger.info("Initializing client with provided session string")
-    
-    try:
-        client = TelegramClient(StringSession(session_string), API_ID, API_HASH)
+    # Check if we already have a session string
+    if not SESSION_STRING:
+        logger.info("No existing session found, creating new one")
+        
+        # Get new session
+        client = TelegramClient(StringSession(), API_ID, API_HASH)
         await client.start()
         
-        # Verify connection
-        me = await client.get_me()
-        logger.info(f"Successfully connected as {me.first_name} (@{me.username})")
+        # Get the session string
+        session_string = client.session.save()
         
-        # Start monitoring
-        await check_and_notify()
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize client: {e}")
-    finally:
-        if client:
-            await client.disconnect()
-        logger.info("Client disconnected")
+        # Save to .env file
+        set_key('.env', 'SESSION_STRING', session_string)
+        logger.info("Session string saved to .env file")
+    else:
+        logger.info("Using existing session from .env file")
+        client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+        await client.start()
+    
+    # Verify connection
+    me = await client.get_me()
+    logger.info(f"Successfully connected as {me.first_name} (@{me.username})")
+    
+    # Start FastAPI server in background
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+    server = uvicorn.Server(config)
+    asyncio.create_task(server.serve())
+    
+    # Start monitoring
+    await check_and_notify()
 
 if __name__ == "__main__":
     try:
@@ -232,3 +246,7 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
+    finally:
+        if client:
+            await client.disconnect()
+        logger.info("Client disconnected")
