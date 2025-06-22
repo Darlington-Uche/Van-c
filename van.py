@@ -2,35 +2,30 @@ import os
 import re
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from threading import Thread
 from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError, RPCError
+from telethon.errors import RPCError
 from difflib import SequenceMatcher
-from fastapi import FastAPI, Response
-import uvicorn
+from flask import Flask, jsonify
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,  # More detailed logging
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler()
-    ]
-)
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-app = FastAPI()
+# Flask App
+app = Flask(__name__)
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+@app.route('/health')
+def health():
+    return jsonify({
+        "status": "running",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
 
-# Load environment variables
+# Load env variables
 load_dotenv()
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
@@ -39,102 +34,66 @@ NOTIFICATION_GROUP = os.getenv("NOT", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 
 if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
-    logger.critical("Missing required environment variables. Please check API_ID, API_HASH, and NOTIFICATION_GROUP")
+    logger.critical("Missing env variables: API_ID, API_HASH, or NOT")
     exit(1)
 
-# Global state
+# Globals
 last_task_count = 0
 last_notification_time = None
 client = None
-check_interval = 120  # 2 minutes in seconds
+check_interval = 120  # seconds
 
 def similar(a, b):
-    """Calculate text similarity ratio between two strings"""
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 async def click_button_by_relation(event, target_text, threshold=0.6):
-    """
-    Click a button that is semantically related to the target text
-    Returns True if clicked, False otherwise
-    """
     if not event.buttons:
-        logger.debug("No buttons available to click")
         return False
-
-    logger.debug(f"Looking for button related to: '{target_text}'")
-    
-    best_match = None
     best_score = 0
     best_position = (0, 0)
-
     for r, row in enumerate(event.buttons):
         for c, btn in enumerate(row):
-            btn_text = btn.text or ""
-            score = similar(btn_text, target_text)
-            logger.debug(f"Button '{btn_text}' similarity score: {score:.2f}")
-            
+            text = btn.text or ""
+            score = similar(text, target_text)
             if score > best_score:
                 best_score = score
-                best_match = btn_text
                 best_position = (r, c)
-
     if best_score >= threshold:
-        logger.info(f"Clicking button '{best_match}' (score: {best_score:.2f}) at position {best_position}")
         try:
             await event.click(best_position[0], best_position[1])
             return True
         except RPCError as e:
-            logger.error(f"Failed to click button: {e}")
+            logger.error(f"Click error: {e}")
             return False
-    else:
-        logger.debug(f"No button reached similarity threshold (best was '{best_match}' at {best_score:.2f})")
-        return False
+    return False
 
 async def navigate_to_tasks():
-    """Navigate through the bot menus to reach the tasks panel"""
-    logger.info("Starting navigation to tasks")
-    
+    logger.info("Navigating to tasks without /start")
     try:
-        # Step 1: Ensure we're at the start
-        async for msg in client.iter_messages(TARGET_BOT, from_user="me", limit=1):
-            if msg.text and "/start" in msg.text.lower():
-                logger.debug("Found recent /start message")
+        # Step 1: Always try to return to main menu first
+        async for msg in client.iter_messages(TARGET_BOT, limit=3):
+            if await click_button_by_relation(msg, "main menu"):
+                logger.info("Clicked 'Main Menu' to reset bot state")
+                await asyncio.sleep(2)
                 break
-        else:
-            logger.info("Sending /start command")
-            await client.send_message(TARGET_BOT, "/start")
-            await asyncio.sleep(2)
 
-        # Step 2: Check welcome message and proceed
-        async for msg in client.iter_messages(TARGET_BOT, limit=1):
+        # Step 2: Look for welcome message and click "Go to Task"
+        async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Welcome to the vankedisi Adventure!" in msg.text:
-                logger.debug("Found welcome message")
                 if await click_button_by_relation(msg, "go to task"):
-                    logger.info("Clicked 'Go to Task Bot' button")
+                    logger.info("Clicked 'Go to Task Bot'")
                     await asyncio.sleep(2)
-                else:
-                    logger.warning("Failed to find 'Go to Task Bot' button")
-                    return False
+                break
 
-        # Step 3: Check if we're in tasks panel
-        async for msg in client.iter_messages(TARGET_BOT, limit=1):
+        # Step 3: Find task panel and click 'Tasks'
+        async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Task Panel" in msg.text:
-                logger.debug("Found task panel")
                 if await click_button_by_relation(msg, "tasks"):
-                    logger.info("Clicked 'Tasks' button")
+                    logger.info("Entered Task Panel")
                     await asyncio.sleep(2)
                     return True
-                else:
-                    logger.warning("Failed to find 'Tasks' button")
-                    return False
 
-        # If we're not where we expect, try to return to main menu
-        async for msg in client.iter_messages(TARGET_BOT, limit=1):
-            if await click_button_by_relation(msg, "main menu"):
-                logger.info("Returned to main menu")
-                return False
-
-        logger.warning("Couldn't determine current bot state")
+        logger.warning("Failed to reach Task Panel")
         return False
 
     except Exception as e:
@@ -142,111 +101,57 @@ async def navigate_to_tasks():
         return False
 
 async def get_task_count():
-    """Get the number of available tasks"""
-    logger.info("Checking for available tasks")
-    
     try:
         if not await navigate_to_tasks():
-            logger.warning("Failed to navigate to tasks")
             return 0
-
         async for msg in client.iter_messages(TARGET_BOT, limit=1):
             if "Active Tasks" in msg.text:
-                task_count = msg.text.count("🔹 [")
-                logger.info(f"Found {task_count} available tasks")
-                return task_count
-            else:
-                logger.debug("Not in active tasks view")
-                return 0
-
+                count = msg.text.count("🔹 [")
+                logger.info(f"Found {count} tasks")
+                return count
     except Exception as e:
-        logger.error(f"Error getting task count: {e}")
-        return 0
+        logger.error(f"Task count error: {e}")
+    return 0
 
-async def send_notification(message):
-    """Send notification to the group"""
+async def send_notification(msg):
     try:
-        logger.info(f"Sending notification: {message}")
-        await client.send_message(NOTIFICATION_GROUP, message)
-        return True
+        await client.send_message(NOTIFICATION_GROUP, msg)
     except Exception as e:
-        logger.error(f"Failed to send notification: {e}")
-        return False
+        logger.error(f"Notification failed: {e}")
 
-async def check_and_notify():
-    """Main monitoring loop"""
+async def monitor():
     global last_task_count, last_notification_time
-    
-    logger.info("Starting monitoring loop")
-    
     while True:
         try:
-            current_task_count = await get_task_count()
-            logger.debug(f"Current tasks: {current_task_count}, Last tasks: {last_task_count}")
-            
-            if current_task_count > 0:
-                if current_task_count != last_task_count:
-                    # New tasks available
-                    message = f"🚨 {current_task_count} NEW TASKS AVAILABLE on Vankedisi! Rush to complete them! 🚨"
-                    if await send_notification(message):
-                        last_notification_time = datetime.now(timezone.utc)
-                last_task_count = current_task_count
-            else:
-                if last_task_count > 0:
-                    # Tasks were available but now gone
-                    message = "⚠️ No more tasks available on Vankedisi. Keep checking!"
-                    await send_notification(message)
+            count = await get_task_count()
+            if count > 0 and count != last_task_count:
+                msg = f"🚨 {count} NEW TASKS AVAILABLE on Vankedisi!"
+                await send_notification(msg)
+                last_notification_time = datetime.now(timezone.utc)
+                last_task_count = count
+            elif count == 0 and last_task_count > 0:
+                await send_notification("⚠️ No more tasks available.")
                 last_task_count = 0
-            
-            logger.debug(f"Waiting {check_interval} seconds for next check")
-            await asyncio.sleep(check_interval)
-            
         except Exception as e:
-            logger.error(f"Error in monitoring loop: {e}")
-            await asyncio.sleep(check_interval)
+            logger.error(f"Monitor loop error: {e}")
+        await asyncio.sleep(check_interval)
 
-async def main():
+async def start_bot():
     global client
-    
-    # Check if we already have a session string
     if not SESSION_STRING:
-        logger.info("No existing session found, creating new one")
-        
-        # Get new session
         client = TelegramClient(StringSession(), API_ID, API_HASH)
         await client.start()
-        
-        # Get the session string
-        session_string = client.session.save()
-        
-        # Save to .env file
-        set_key('.env', 'SESSION_STRING', session_string)
-        logger.info("Session string saved to .env file")
+        set_key('.env', 'SESSION_STRING', client.session.save())
     else:
-        logger.info("Using existing session from .env file")
         client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
         await client.start()
-    
-    # Verify connection
     me = await client.get_me()
-    logger.info(f"Successfully connected as {me.first_name} (@{me.username})")
-    
-    # Start FastAPI server in background
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
-    server = uvicorn.Server(config)
-    asyncio.create_task(server.serve())
-    
-    # Start monitoring
-    await check_and_notify()
+    logger.info(f"Bot started as {me.first_name} (@{me.username})")
+    await monitor()
 
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-    finally:
-        if client:
-            await client.disconnect()
-        logger.info("Client disconnected")
+def start_loop():
+    asyncio.run(start_bot())
+
+if __name__ == '__main__':
+    Thread(target=start_loop).start()
+    app.run(host="0.0.0.0", port=5000)
