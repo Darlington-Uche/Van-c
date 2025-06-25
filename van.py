@@ -106,7 +106,7 @@ async def get_task_count():
             return 0
         async for msg in client.iter_messages(TARGET_BOT, limit=1):
             if "Active Tasks" in msg.text:
-                count = msg.text.count("🔹 [")
+                count = msg.text.count("🔹")
                 logger.info(f"Found {count} tasks")
                 return count
     except Exception as e:
