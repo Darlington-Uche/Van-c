@@ -30,7 +30,7 @@ load_dotenv()
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 TARGET_BOT = "@vankedisicoin_bot"
-NOTIFICATION_GROUP = os.getenv("NOT", "")
+NOTIFICATION_GROUP = os.getenv("GROUP_ID", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 
 if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
