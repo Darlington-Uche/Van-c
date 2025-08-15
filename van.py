@@ -7,12 +7,19 @@ from threading import Thread
 from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import RPCError
+from telethon.errors import RPCError, ConnectionError
 from difflib import SequenceMatcher
 from flask import Flask, jsonify
 
 # Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot.log')  # Log to file as well
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Flask App
@@ -34,7 +41,7 @@ NOTIFICATION_GROUP = os.getenv("GROUP_ID", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 
 if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
-    logger.critical("Missing env variables: API_ID, API_HASH, or NOT")
+    logger.critical("Missing env variables: API_ID, API_HASH, or GROUP_ID")
     exit(1)
 
 # Globals
@@ -42,6 +49,8 @@ last_task_count = 0
 last_notification_time = None
 client = None
 check_interval = 120  # seconds
+max_retries = 5
+retry_delay = 30  # seconds
 
 def similar(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
@@ -134,24 +143,91 @@ async def monitor():
                 last_task_count = 0
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
+            # If we get an error, try to reconnect
+            await reconnect()
         await asyncio.sleep(check_interval)
+
+async def reconnect():
+    """Reconnect to Telegram with retries"""
+    global client
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempting to reconnect (attempt {attempt + 1}/{max_retries})")
+            if client and client.is_connected():
+                await client.disconnect()
+            
+            if SESSION_STRING:
+                client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+            else:
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+            
+            await client.connect()
+            
+            if not await client.is_user_authorized():
+                logger.error("Reconnect failed - not authorized")
+                continue
+                
+            me = await client.get_me()
+            logger.info(f"Reconnected successfully as {me.first_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Reconnect attempt {attempt + 1} failed: {e}")
+            await asyncio.sleep(retry_delay)
+    
+    logger.critical("Failed to reconnect after multiple attempts")
+    return False
 
 async def start_bot():
     global client
-    if not SESSION_STRING:
-        client = TelegramClient(StringSession(), API_ID, API_HASH)
-        await client.start()
-        set_key('.env', 'SESSION_STRING', client.session.save())
-    else:
-        client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-        await client.start()
-    me = await client.get_me()
-    logger.info(f"Bot started as {me.first_name} (@{me.username})")
-    await monitor()
+    while True:  # Outer loop to restart the bot if it crashes completely
+        try:
+            logger.info("Starting bot...")
+            if not SESSION_STRING:
+                client = TelegramClient(StringSession(), API_ID, API_HASH)
+                await client.start()
+                set_key('.env', 'SESSION_STRING', client.session.save())
+            else:
+                client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+                await client.start()
+            
+            me = await client.get_me()
+            logger.info(f"Bot started as {me.first_name} (@{me.username})")
+            
+            # Start monitoring
+            await monitor()
+            
+        except ConnectionError as e:
+            logger.error(f"Connection error: {e}. Attempting to reconnect...")
+            if not await reconnect():
+                logger.error("Reconnection failed. Restarting bot...")
+                await asyncio.sleep(retry_delay)
+                continue
+                
+        except Exception as e:
+            logger.error(f"Unexpected error in main loop: {e}")
+            logger.info("Restarting bot in 30 seconds...")
+            await asyncio.sleep(retry_delay)
+            continue
 
-def start_loop():
-    asyncio.run(start_bot())
+def run_bot():
+    # Create a new event loop for the thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        loop.run_until_complete(start_bot())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error in bot thread: {e}")
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
-    Thread(target=start_loop).start()
+    # Start bot in a separate thread with its own event loop
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Start Flask app
     app.run(host="0.0.0.0", port=5000)
