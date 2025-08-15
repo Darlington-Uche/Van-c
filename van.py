@@ -7,7 +7,7 @@ from threading import Thread
 from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import RPCError, ConnectionError
+from telethon.errors import RPCError
 from difflib import SequenceMatcher
 from flask import Flask, jsonify
 
@@ -197,7 +197,7 @@ async def start_bot():
             # Start monitoring
             await monitor()
             
-        except ConnectionError as e:
+        except (RPCError, ConnectionError, OSError) as e:
             logger.error(f"Connection error: {e}. Attempting to reconnect...")
             if not await reconnect():
                 logger.error("Reconnection failed. Restarting bot...")
