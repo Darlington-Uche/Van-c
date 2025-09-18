@@ -48,9 +48,9 @@ if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
 last_task_count = 0
 last_notification_time = None
 client = None
-check_interval = 120  # seconds
+check_interval = 60  # seconds
 max_retries = 5
-retry_delay = 30  # seconds
+retry_delay = 10 # seconds
 
 def similar(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
@@ -134,12 +134,12 @@ async def monitor():
         try:
             count = await get_task_count()
             if count > 0 and count != last_task_count:
-                msg = f"🚨 {count} NEW TASKS AVAILABLE on Vankedisi!"
+                msg = f"🚸Niggas☢️{count} NEW TASKS AVAILABLE on Vankedisi! Go make Your 10 bucks"
                 await send_notification(msg)
                 last_notification_time = datetime.now(timezone.utc)
                 last_task_count = count
             elif count == 0 and last_task_count > 0:
-                await send_notification("⚠️ No more tasks available.")
+                await send_notification("⚠️ No more tasks available. Go and Sleep")
                 last_task_count = 0
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
