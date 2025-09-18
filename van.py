@@ -134,7 +134,7 @@ async def monitor():
         try:
             count = await get_task_count()
             if count > 0 and count != last_task_count:
-                msg = f"🚸Niggas☢️{count} NEW TASKS AVAILABLE on Vankedisi! Go make Your 10 bucks"
+                msg = f"🚨🚨 Loot {count} NEW TASKS AVAILABLE on Vankedisi! Go make Your 10 bucks"
                 await send_notification(msg)
                 last_notification_time = datetime.now(timezone.utc)
                 last_task_count = count
