@@ -7,7 +7,7 @@ from threading import Thread
 from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import RPCError, ChannelPrivateError, ChatWriteForbiddenError
+from telethon.errors import RPCError
 from difflib import SequenceMatcher
 from flask import Flask, jsonify
 
@@ -17,7 +17,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('bot.log')
+        logging.FileHandler('bot.log')  # Log to file as well
     ]
 )
 logger = logging.getLogger(__name__)
@@ -37,15 +37,8 @@ load_dotenv()
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 TARGET_BOT = "@vankedisicoin_bot"
-NOTIFICATION_GROUP = os.getenv("GROUP_ID", "3071139125")  # Your channel ID
+NOTIFICATION_GROUP = os.getenv("GROUP_ID", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
-
-# Convert to integer if it's a numeric ID
-try:
-    if NOTIFICATION_GROUP and NOTIFICATION_GROUP.strip().lstrip('-').isdigit():
-        NOTIFICATION_GROUP = int(NOTIFICATION_GROUP)
-except ValueError:
-    pass  # Keep as string if it's a username
 
 if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
     logger.critical("Missing env variables: API_ID, API_HASH, or GROUP_ID")
@@ -55,9 +48,9 @@ if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
 last_task_count = 0
 last_notification_time = None
 client = None
-check_interval = 60
+check_interval = 60  # seconds
 max_retries = 5
-retry_delay = 10
+retry_delay = 10 # seconds
 
 def similar(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
@@ -131,77 +124,26 @@ async def get_task_count():
 
 async def send_notification(msg):
     try:
-        # Try to send to the private channel
         await client.send_message(NOTIFICATION_GROUP, msg)
-        logger.info(f"Notification sent successfully to {NOTIFICATION_GROUP}")
-        return True
-        
-    except ChannelPrivateError:
-        logger.error("Channel is private and bot doesn't have access. Please add the bot to the channel as admin.")
-        return False
-        
-    except ChatWriteForbiddenError:
-        logger.error("Bot doesn't have permission to send messages in this channel. Please check admin permissions.")
-        return False
-        
-    except ValueError as e:
-        logger.error(f"Invalid chat ID: {e}")
-        return False
-        
     except Exception as e:
         logger.error(f"Notification failed: {e}")
-        return False
-
-async def check_channel_access():
-    """Check if we can access the notification channel"""
-    try:
-        # Try to get channel info
-        channel = await client.get_entity(NOTIFICATION_GROUP)
-        logger.info(f"Channel info: {channel}")
-        
-        # Try to send a test message
-        test_msg = await client.send_message(NOTIFICATION_GROUP, "🤖 Bot started successfully! Monitoring tasks...")
-        await asyncio.sleep(2)
-        await test_msg.delete()  # Clean up test message
-        
-        logger.info("Channel access verified")
-        return True
-        
-    except ChannelPrivateError:
-        logger.error("❌ Cannot access private channel. Please:")
-        logger.error("1. Add your bot as ADMIN to the channel")
-        logger.error("2. Grant 'Send Messages' permission")
-        logger.error("3. Make sure the channel ID is correct")
-        return False
-        
-    except Exception as e:
-        logger.error(f"Channel access check failed: {e}")
-        return False
 
 async def monitor():
     global last_task_count, last_notification_time
     while True:
         try:
             count = await get_task_count()
-            logger.info(f"Current task count: {count}, Previous: {last_task_count}")
-            
             if count > 0 and count != last_task_count:
                 msg = f"🚨🚨 {count} TASKS AVAILABLE!!🚨🚨"
-                success = await send_notification(msg)
-                if success:
-                    last_notification_time = datetime.now(timezone.utc)
-                    last_task_count = count
-                else:
-                    logger.error("Failed to send notification - check channel access")
-                    
+                await send_notification(msg)
+                last_notification_time = datetime.now(timezone.utc)
+                last_task_count = count
             elif count == 0 and last_task_count > 0:
-                msg = "⚠️ God don Catch una, U Think say you wise ^dey play^ supe otilorrŕr"
-                success = await send_notification(msg)
-                if success:
-                    last_task_count = 0
-                    
+                await send_notification("⚠️ No Tasks Seen ")
+                last_task_count = 0
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
+            # If we get an error, try to reconnect
             await reconnect()
         await asyncio.sleep(check_interval)
 
@@ -227,9 +169,6 @@ async def reconnect():
 
             me = await client.get_me()
             logger.info(f"Reconnected successfully as {me.first_name}")
-            
-            # Verify channel access after reconnection
-            await check_channel_access()
             return True
 
         except Exception as e:
@@ -241,7 +180,7 @@ async def reconnect():
 
 async def start_bot():
     global client
-    while True:
+    while True:  # Outer loop to restart the bot if it crashes completely
         try:
             logger.info("Starting bot...")
             if not SESSION_STRING:
@@ -255,21 +194,24 @@ async def start_bot():
             me = await client.get_me()
             logger.info(f"Bot started as {me.first_name} (@{me.username})")
 
-            # Check channel access before starting monitoring
-            if await check_channel_access():
-                logger.info("Channel access verified, starting monitoring...")
-                await monitor()
-            else:
-                logger.error("Channel access failed. Waiting 60 seconds before retry...")
-                await asyncio.sleep(60)
+            # Start monitoring
+            await monitor()
+
+        except (RPCError, ConnectionError, OSError) as e:
+            logger.error(f"Connection error: {e}. Attempting to reconnect...")
+            if not await reconnect():
+                logger.error("Reconnection failed. Restarting bot...")
+                await asyncio.sleep(retry_delay)
+                continue
 
         except Exception as e:
             logger.error(f"Unexpected error in main loop: {e}")
             logger.info("Restarting bot in 30 seconds...")
-            await asyncio.sleep(30)
+            await asyncio.sleep(retry_delay)
             continue
 
 def run_bot():
+    # Create a new event loop for the thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -283,7 +225,9 @@ def run_bot():
         loop.close()
 
 if __name__ == '__main__':
+    # Start bot in a separate thread with its own event loop
     bot_thread = Thread(target=run_bot, daemon=True)
     bot_thread.start()
 
+    # Start Flask app
     app.run(host="0.0.0.0", port=5000)
