@@ -64,9 +64,17 @@ async def resolve_notification_entity():
         if NOTIFICATION_GROUP.startswith("https://t.me/+"):
             # Private channel invite link
             invite_hash = NOTIFICATION_GROUP.split("+")[-1]
-            result = await client(ImportChatInviteRequest(invite_hash))
-            notification_entity = result.chats[0]
-            logger.info(f"Joined private channel: {notification_entity.title}")
+            try:
+                result = await client(ImportChatInviteRequest(invite_hash))
+                notification_entity = result.chats[0]
+                logger.info(f"Joined private channel: {notification_entity.title}")
+            except ValueError as e:
+                # Already a participant? fallback to get_entity
+                if "already a participant" in str(e).lower():
+                    notification_entity = await client.get_entity(NOTIFICATION_GROUP)
+                    logger.info(f"Already a participant, resolved entity: {notification_entity.title}")
+                else:
+                    raise e
         else:
             # Public channel or group
             notification_entity = await client.get_entity(NOTIFICATION_GROUP)
