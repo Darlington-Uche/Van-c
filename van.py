@@ -8,6 +8,7 @@ from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.errors import RPCError
+from telethon.tl.functions.messages import ImportChatInviteRequest
 from difflib import SequenceMatcher
 from flask import Flask, jsonify
 
@@ -17,7 +18,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('bot.log')  # Log to file as well
+        logging.FileHandler('bot.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -51,9 +52,28 @@ client = None
 check_interval = 60  # seconds
 max_retries = 5
 retry_delay = 10 # seconds
+notification_entity = None
 
 def similar(a, b):
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+async def resolve_notification_entity():
+    """Resolve NOTIFICATION_GROUP to a proper Telethon entity"""
+    global notification_entity
+    try:
+        if NOTIFICATION_GROUP.startswith("https://t.me/+"):
+            # Private channel invite link
+            invite_hash = NOTIFICATION_GROUP.split("+")[-1]
+            result = await client(ImportChatInviteRequest(invite_hash))
+            notification_entity = result.chats[0]
+            logger.info(f"Joined private channel: {notification_entity.title}")
+        else:
+            # Public channel or group
+            notification_entity = await client.get_entity(NOTIFICATION_GROUP)
+            logger.info(f"Notification entity resolved: {notification_entity.title if hasattr(notification_entity, 'title') else notification_entity.username}")
+    except Exception as e:
+        logger.error(f"Failed to resolve notification entity: {e}")
+        notification_entity = None
 
 async def click_button_by_relation(event, target_text, threshold=0.6):
     if not event.buttons:
@@ -79,14 +99,12 @@ async def click_button_by_relation(event, target_text, threshold=0.6):
 async def navigate_to_tasks():
     logger.info("Navigating to tasks without /start")
     try:
-        # Step 1: Always try to return to main menu first
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if await click_button_by_relation(msg, "main menu"):
                 logger.info("Clicked 'Main Menu' to reset bot state")
                 await asyncio.sleep(2)
                 break
 
-        # Step 2: Look for welcome message and click "Go to Task"
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Welcome to the vankedisi Adventure!" in msg.text:
                 if await click_button_by_relation(msg, "go to task"):
@@ -94,7 +112,6 @@ async def navigate_to_tasks():
                     await asyncio.sleep(2)
                 break
 
-        # Step 3: Find task panel and click 'Tasks'
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Task Panel" in msg.text:
                 if await click_button_by_relation(msg, "tasks"):
@@ -104,7 +121,6 @@ async def navigate_to_tasks():
 
         logger.warning("Failed to reach Task Panel")
         return False
-
     except Exception as e:
         logger.error(f"Navigation error: {e}")
         return False
@@ -123,10 +139,16 @@ async def get_task_count():
     return 0
 
 async def send_notification(msg):
-    try:
-        await client.send_message(NOTIFICATION_GROUP, msg)
-    except Exception as e:
-        logger.error(f"Notification failed: {e}")
+    global notification_entity
+    if not notification_entity:
+        await resolve_notification_entity()
+    if notification_entity:
+        try:
+            await client.send_message(notification_entity, msg)
+        except Exception as e:
+            logger.error(f"Notification failed: {e}")
+    else:
+        logger.error("Cannot send notification, entity not resolved.")
 
 async def monitor():
     global last_task_count, last_notification_time
@@ -139,16 +161,14 @@ async def monitor():
                 last_notification_time = datetime.now(timezone.utc)
                 last_task_count = count
             elif count == 0 and last_task_count > 0:
-                await send_notification("⚠️ No Tasks Seen ")
+                await send_notification("⚠️ No Tasks Seen")
                 last_task_count = 0
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
-            # If we get an error, try to reconnect
             await reconnect()
         await asyncio.sleep(check_interval)
 
 async def reconnect():
-    """Reconnect to Telegram with retries"""
     global client
     for attempt in range(max_retries):
         try:
@@ -180,7 +200,7 @@ async def reconnect():
 
 async def start_bot():
     global client
-    while True:  # Outer loop to restart the bot if it crashes completely
+    while True:
         try:
             logger.info("Starting bot...")
             if not SESSION_STRING:
@@ -193,6 +213,9 @@ async def start_bot():
 
             me = await client.get_me()
             logger.info(f"Bot started as {me.first_name} (@{me.username})")
+
+            # Resolve notification entity
+            await resolve_notification_entity()
 
             # Start monitoring
             await monitor()
@@ -211,10 +234,8 @@ async def start_bot():
             continue
 
 def run_bot():
-    # Create a new event loop for the thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
     try:
         loop.run_until_complete(start_bot())
     except KeyboardInterrupt:
@@ -225,9 +246,6 @@ def run_bot():
         loop.close()
 
 if __name__ == '__main__':
-    # Start bot in a separate thread with its own event loop
     bot_thread = Thread(target=run_bot, daemon=True)
     bot_thread.start()
-
-    # Start Flask app
     app.run(host="0.0.0.0", port=5000)
