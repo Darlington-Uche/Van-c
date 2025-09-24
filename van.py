@@ -7,7 +7,7 @@ from threading import Thread
 from dotenv import load_dotenv, set_key
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import RPCError
+from telethon.errors import RPCError, UserAlreadyParticipantError
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from difflib import SequenceMatcher
 from flask import Flask, jsonify
@@ -68,13 +68,10 @@ async def resolve_notification_entity():
                 result = await client(ImportChatInviteRequest(invite_hash))
                 notification_entity = result.chats[0]
                 logger.info(f"Joined private channel: {notification_entity.title}")
-            except ValueError as e:
-                # Already a participant? fallback to get_entity
-                if "already a participant" in str(e).lower():
-                    notification_entity = await client.get_entity(NOTIFICATION_GROUP)
-                    logger.info(f"Already a participant, resolved entity: {notification_entity.title}")
-                else:
-                    raise e
+            except UserAlreadyParticipantError:
+                # Already a participant, fallback to get_entity
+                notification_entity = await client.get_entity(NOTIFICATION_GROUP)
+                logger.info(f"Already a participant, resolved entity: {notification_entity.title if hasattr(notification_entity, 'title') else notification_entity.username}")
         else:
             # Public channel or group
             notification_entity = await client.get_entity(NOTIFICATION_GROUP)
