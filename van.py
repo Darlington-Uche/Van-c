@@ -49,7 +49,7 @@ if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
 last_task_count = 0
 last_notification_time = None
 client = None
-check_interval = 30  # seconds
+check_interval = 20 # seconds
 max_retries = 5
 retry_delay = 5 # seconds
 notification_entity = None
@@ -107,21 +107,21 @@ async def navigate_to_tasks():
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if await click_button_by_relation(msg, "main menu"):
                 logger.info("Clicked 'Main Menu' to reset bot state")
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 break
 
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Welcome to the vankedisi Adventure!" in msg.text:
                 if await click_button_by_relation(msg, "go to task"):
                     logger.info("Clicked 'Go to Task Bot'")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                 break
 
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Task Panel" in msg.text:
                 if await click_button_by_relation(msg, "tasks"):
                     logger.info("Entered Task Panel")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     return True
 
         logger.warning("Failed to reach Task Panel")
@@ -166,7 +166,7 @@ async def monitor():
                 last_notification_time = datetime.now(timezone.utc)
                 last_task_count = count
             elif count == 0 and last_task_count > 0:
-                await send_notification("⚠️ No Tasks Seen")
+                await send_notification("⚠️ No Tasks omo i don Tire ")
                 last_task_count = 0
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
