@@ -49,9 +49,9 @@ if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
 last_task_count = 0
 last_notification_time = None
 client = None
-check_interval = 60  # seconds
+check_interval = 20  # seconds
 max_retries = 5
-retry_delay = 10 # seconds
+retry_delay = 5 # seconds
 notification_entity = None
 
 def similar(a, b):
@@ -107,21 +107,21 @@ async def navigate_to_tasks():
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if await click_button_by_relation(msg, "main menu"):
                 logger.info("Clicked 'Main Menu' to reset bot state")
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
                 break
 
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Welcome to the vankedisi Adventure!" in msg.text:
                 if await click_button_by_relation(msg, "go to task"):
                     logger.info("Clicked 'Go to Task Bot'")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                 break
 
         async for msg in client.iter_messages(TARGET_BOT, limit=3):
             if "Task Panel" in msg.text:
                 if await click_button_by_relation(msg, "tasks"):
                     logger.info("Entered Task Panel")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     return True
 
         logger.warning("Failed to reach Task Panel")
