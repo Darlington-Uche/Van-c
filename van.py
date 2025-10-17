@@ -166,7 +166,7 @@ async def monitor():
                 last_notification_time = datetime.now(timezone.utc)
                 last_task_count = count
             elif count == 0 and last_task_count > 0:
-                await send_notification("⚠️ No Tasks omo i don Tire ")
+                await send_notification("⚠️ No Tasks WAGMi ")
                 last_task_count = 0
         except Exception as e:
             logger.error(f"Monitor loop error: {e}")
