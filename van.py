@@ -12,7 +12,7 @@ from telethon.tl.functions.messages import ImportChatInviteRequest
 from difflib import SequenceMatcher
 from flask import Flask, jsonify
 
-# Logging
+# Loggingb
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
