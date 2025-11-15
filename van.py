@@ -49,9 +49,9 @@ if not API_ID or not API_HASH or not NOTIFICATION_GROUP:
 last_task_count = 0
 last_notification_time = None
 client = None
-check_interval = 30 # seconds
+check_interval = 20 # seconds
 max_retries = 5
-retry_delay = 20 # seconds
+retry_delay = 5 # seconds
 notification_entity = None
 
 def similar(a, b):
