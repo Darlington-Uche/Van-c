@@ -51,7 +51,7 @@ last_notification_time = None
 client = None
 check_interval = 20 # seconds
 max_retries = 5
-retry_delay = 5 # seconds
+retry_delay = 2 # seconds
 notification_entity = None
 
 def similar(a, b):
