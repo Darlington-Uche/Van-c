@@ -162,7 +162,7 @@ async def monitor():
         try:
             count = await get_task_count()
             if count > 0 and count != last_task_count:
-                msg = f"🚨🚨 {count} TASKS AVAILABLE!!🚨🚨"
+                msg = f"🚨🚨 {count} TASKS AVAILABLE!🚨🚨"
                 await send_notification(msg)
                 last_notification_time = datetime.now(timezone.utc)
                 last_task_count = count
